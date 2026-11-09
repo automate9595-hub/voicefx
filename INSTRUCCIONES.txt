@@ -1,0 +1,24 @@
+VOICE FX PRO — PARCHE UI / EFECTOS / AUDIO COMPARTIDO
+
+Reemplazar estos archivos respetando exactamente las rutas:
+1) app/src/main/java/com/voicefxpro/ui/EffectsScreen.kt
+2) app/src/main/java/com/voicefxpro/ParamStore.kt
+3) app/src/main/cpp/audio/OboeEngine.cpp
+
+Cambios:
+- La pestaña EFECTOS muestra mosaicos cuadrados en tres columnas.
+- Toque corto: activa/desactiva el efecto.
+- Mantener presionado: abre los controles de edición de ese efecto.
+- Cada mosaico muestra ACTIVO/APAGADO.
+- El último nivel utilizado por cada efecto se recuerda al apagarlo y se restaura al volver a encenderlo.
+- Oboe solicita modo Shared para entrada y salida, sin pedir propiedad exclusiva de los endpoints.
+
+IMPORTANTE SOBRE STARAMAKER:
+Este parche NO puede hacer que StarMaker reciba el audio procesado como micrófono. Android no ofrece a una app normal sin ROOT una API para sustituir el micrófono de otra app. El modo Shared tampoco redirige la captura de StarMaker; solamente evita solicitar exclusividad. Para que StarMaker reciba el procesamiento se necesita una ruta externa compatible (por ejemplo, interfaz USB con loopback/entrada que StarMaker seleccione) o integración a nivel de sistema no disponible en un teléfono stock.
+
+Aplicación:
+- Descomprimir el ZIP.
+- Subir/reemplazar los tres archivos en las rutas indicadas en el repositorio.
+- Hacer commit en la rama main.
+- GitHub Actions compilará automáticamente.
+- Revisar que la compilación termine en verde antes de instalar. Este parche aún no fue compilado en tu teléfono.

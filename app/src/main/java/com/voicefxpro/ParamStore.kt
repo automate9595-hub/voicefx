@@ -9,11 +9,8 @@ data class UserPreset(val name: String, val values: Map<Param, Float>)
 /** Valores actuales de todos los parámetros: persistencia, envío al motor y presets del usuario. */
 object ParamStore {
     val values = FloatArray(Param.values().size) { Param.values()[it].def }
-
-    /** Se incrementa cuando los valores cambian "desde afuera" (preset, restaurar) para refrescar los controles. */
     val revision = mutableIntStateOf(0)
     val presetName = androidx.compose.runtime.mutableStateOf("")
-
     private var prefs: SharedPreferences? = null
 
     fun init(context: Context) {
@@ -21,18 +18,14 @@ object ParamStore {
         val p = context.applicationContext.getSharedPreferences("voicefx", Context.MODE_PRIVATE)
         prefs = p
         for (param in Param.values()) {
-            values[param.ordinal] = try {
-                p.getFloat("p." + param.key, param.def)
-            } catch (_: ClassCastException) {
-                param.def
-            }.coerceIn(param.min, param.max)
+            values[param.ordinal] = try { p.getFloat("p." + param.key, param.def) }
+                catch (_: ClassCastException) { param.def }.coerceIn(param.min, param.max)
         }
         migrateOldKeys(p)
         values[Param.BYPASS.ordinal] = 0f
         presetName.value = p.getString("preset_name", "") ?: ""
     }
 
-    /** Versiones 0.2.x guardaban enteros 0-100 con claves sin prefijo. */
     private fun migrateOldKeys(p: SharedPreferences) {
         if (p.getBoolean("p.migrated", false)) return
         val ed = p.edit()
@@ -41,11 +34,8 @@ object ParamStore {
             "drive" to Param.DRIVE, "bass" to Param.BASS, "treble" to Param.TREBLE, "gate" to Param.GATE, "wet" to Param.MIX
         )
         for ((old, param) in map) {
-            val v = try {
-                if (p.contains(old)) p.getInt(old, -1) else -1
-            } catch (_: ClassCastException) {
-                -1
-            }
+            val v = try { if (p.contains(old)) p.getInt(old, -1) else -1 }
+                catch (_: ClassCastException) { -1 }
             if (v in 0..100) {
                 values[param.ordinal] = v.toFloat().coerceIn(param.min, param.max)
                 ed.putFloat("p." + param.key, values[param.ordinal])
@@ -57,7 +47,6 @@ object ParamStore {
     fun get(p: Param): Float = values[p.ordinal]
     fun on(p: Param): Boolean = values[p.ordinal] > 0.5f
 
-    /** Cambio puntual (un control de la interfaz). */
     fun set(p: Param, v: Float, persist: Boolean = true) {
         val c = v.coerceIn(p.min, p.max)
         values[p.ordinal] = c
@@ -67,11 +56,25 @@ object ParamStore {
 
     fun setBool(p: Param, on: Boolean) = set(p, if (on) 1f else 0f)
 
+    /** Activa/desactiva un efecto y conserva su último valor para restaurarlo al volver a activarlo. */
+    fun toggleEffect(p: Param, offValue: Float = 0f, fallbackValue: Float = p.def) {
+        val key = "last_effect." + p.key
+        val current = get(p)
+        if (kotlin.math.abs(current - offValue) > 0.0001f) {
+            prefs?.edit()?.putFloat(key, current)?.apply()
+            set(p, offValue)
+        } else {
+            val saved = try { prefs?.getFloat(key, fallbackValue) ?: fallbackValue }
+                catch (_: ClassCastException) { fallbackValue }
+            set(p, saved.coerceIn(p.min, p.max))
+        }
+        revision.intValue++
+    }
+
     fun pushAllToNative() {
         for (p in Param.values()) NativeEngine.setParam(p, values[p.ordinal])
     }
 
-    /** Aplica un conjunto de valores: todo lo no indicado vuelve al valor por defecto. */
     fun applyValues(map: Map<Param, Float>, name: String) {
         val ed = prefs?.edit()
         for (p in Param.values()) {
@@ -87,16 +90,9 @@ object ParamStore {
     }
 
     fun resetAll() = applyValues(emptyMap(), "")
+    fun resetOne(p: Param) { set(p, p.def); revision.intValue++ }
+    fun snapshot(): Map<Param, Float> = Param.values().filter { it != Param.BYPASS }.associateWith { values[it.ordinal] }
 
-    fun resetOne(p: Param) {
-        set(p, p.def)
-        revision.intValue++
-    }
-
-    fun snapshot(): Map<Param, Float> =
-        Param.values().filter { it != Param.BYPASS }.associateWith { values[it.ordinal] }
-
-    // ---------- Presets del usuario ----------
     fun userPresets(): List<UserPreset> {
         val raw = prefs?.getString("user_presets", "") ?: ""
         val out = ArrayList<UserPreset>()
@@ -117,9 +113,7 @@ object ParamStore {
     }
 
     private fun writeUserPresets(list: List<UserPreset>) {
-        val text = list.joinToString("\n") { up ->
-            up.name + "|" + up.values.entries.joinToString(",") { it.key.key + "=" + it.value }
-        }
+        val text = list.joinToString("\n") { up -> up.name + "|" + up.values.entries.joinToString(",") { it.key.key + "=" + it.value } }
         prefs?.edit()?.putString("user_presets", text)?.apply()
     }
 
@@ -136,7 +130,5 @@ object ParamStore {
         return true
     }
 
-    fun deleteUserPreset(name: String) {
-        writeUserPresets(userPresets().filter { it.name != name })
-    }
+    fun deleteUserPreset(name: String) { writeUserPresets(userPresets().filter { it.name != name }) }
 }

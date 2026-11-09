@@ -12,7 +12,9 @@ int OboeEngine::openStreams(int inId, int outId) {
     oboe::AudioStreamBuilder ob;
     ob.setDirection(oboe::Direction::Output)
         ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-        ->setSharingMode(oboe::SharingMode::Exclusive)
+        // Shared mode avoids requesting exclusive ownership of the playback endpoint.
+        // It does NOT create a virtual microphone or redirect another app's AudioRecord input.
+        ->setSharingMode(oboe::SharingMode::Shared)
         ->setFormat(oboe::AudioFormat::Float)
         ->setChannelCount(oboe::ChannelCount::Mono)
         ->setUsage(oboe::Usage::Media)
@@ -24,14 +26,15 @@ int OboeEngine::openStreams(int inId, int outId) {
     if (r != oboe::Result::OK) { LOGE("Salida: %s", oboe::convertToText(r)); return (int)r; }
 
     const int sr = outStream->getSampleRate();
-    // Entrada: preferimos UNPROCESSED (sin AGC/NS/eco del sistema); si el dispositivo no lo admite, probamos otras.
+    // Input is shared as well so this app does not request exclusive microphone ownership.
+    // Android still decides which concurrent capture clients receive audio or silence.
     const oboe::InputPreset presets[3] = {oboe::InputPreset::Unprocessed, oboe::InputPreset::VoiceRecognition, oboe::InputPreset::Generic};
     r = oboe::Result::ErrorInternal;
     for (int i = 0; i < 3 && r != oboe::Result::OK; i++) {
         oboe::AudioStreamBuilder ib;
         ib.setDirection(oboe::Direction::Input)
             ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-            ->setSharingMode(oboe::SharingMode::Exclusive)
+            ->setSharingMode(oboe::SharingMode::Shared)
             ->setFormat(oboe::AudioFormat::Float)
             ->setChannelCount(oboe::ChannelCount::Mono)
             ->setSampleRate(sr)
@@ -69,7 +72,7 @@ int OboeEngine::start(int inDeviceId, int outDeviceId) {
     wantRunning = true; reqIn = inDeviceId; reqOut = outDeviceId;
     closeStreams();
     int r = openStreams(inDeviceId, outDeviceId);
-    if (r != 0 && (inDeviceId != 0 || outDeviceId != 0)) {   // el dispositivo elegido ya no está: probar los del sistema
+    if (r != 0 && (inDeviceId != 0 || outDeviceId != 0)) {
         closeStreams(); r = openStreams(0, 0);
     }
     lastError = r; state = r == 0 ? 1 : 2;
@@ -84,7 +87,7 @@ void OboeEngine::stop() {
 
 oboe::DataCallbackResult OboeEngine::onAudioReady(oboe::AudioStream*, void* audioData, int32_t numFrames) {
     float* out = static_cast<float*>(audioData);
-    auto in = inStream;   // copia local del shared_ptr
+    auto in = inStream;
     if (!in || numFrames <= 0) { std::memset(out, 0, sizeof(float) * (size_t)std::max(0, numFrames)); return oboe::DataCallbackResult::Continue; }
     int32_t done = 0;
     while (done < numFrames) {
@@ -92,13 +95,11 @@ oboe::DataCallbackResult OboeEngine::onAudioReady(oboe::AudioStream*, void* audi
         auto r = in->read(inBuf.data(), n, 0);
         int32_t got = r ? r.value() : 0;
         if (got < n) std::memset(inBuf.data() + got, 0, sizeof(float) * (size_t)(n - got));
-        // Si la entrada acumuló retraso (p. ej. tras un corte), descartar el exceso para no aumentar la latencia.
         int64_t backlog = in->getFramesWritten() - in->getFramesRead();
         if (backlog > 4 * (int64_t)numFrames) {
             int64_t drop = backlog - 2 * (int64_t)numFrames;
             while (drop > 0) { int32_t k = (int32_t)std::min<int64_t>(drop, (int64_t)scratch.size()); auto rr = in->read(scratch.data(), k, 0); if (!rr || rr.value() <= 0) break; drop -= rr.value(); }
         }
-        // Detección de silenciamiento: ceros digitales exactos durante >1,2 s = el sistema silenció/bloqueó el micrófono.
         bool allZero = true; for (int32_t i = 0; i < n; i++) if (inBuf[(size_t)i] != 0.f) { allZero = false; break; }
         zeroRun = allZero ? zeroRun + n : 0;
         silentFlag.store(zeroRun > (int64_t)(1.2 * dsp.sampleRate()) ? 1 : 0, std::memory_order_relaxed);
@@ -106,7 +107,6 @@ oboe::DataCallbackResult OboeEngine::onAudioReady(oboe::AudioStream*, void* audi
         done += n;
     }
     recorder.push(out, numFrames);
-    // Monitoreo: el motor sigue procesando (medidores, grabación) aunque la escucha esté apagada.
     float target = monitorOn.load(std::memory_order_relaxed) ? monitorVol.load(std::memory_order_relaxed) : 0.f;
     for (int32_t i = 0; i < numFrames; i++) { monSmooth += 0.002f * (target - monSmooth); out[i] *= monSmooth; }
     if (tuner && (++callbacks & 7) == 0) tuner->tune();
@@ -116,7 +116,7 @@ oboe::DataCallbackResult OboeEngine::onAudioReady(oboe::AudioStream*, void* audi
 void OboeEngine::onErrorAfterClose(oboe::AudioStream*, oboe::Result error) {
     LOGE("Error de audio: %s", oboe::convertToText(error));
     lastError = (int)error;
-    if (wantRunning.load()) restartAsync();   // desconexión de auriculares/USB/Bluetooth, cambio de ruta, etc.
+    if (wantRunning.load()) restartAsync();
 }
 
 void OboeEngine::restartAsync() {
