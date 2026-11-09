@@ -117,7 +117,7 @@ fun EffectsScreen() {
                 Column(
                     Modifier.fillMaxWidth().heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) { editor.editor() }
+                ) { editor.editor(this) }
             },
             confirmButton = { TextButton(onClick = { selected = null }) { Text("LISTO") } },
             containerColor = VfxColors.Panel
